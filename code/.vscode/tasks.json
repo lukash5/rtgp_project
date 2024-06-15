@@ -1,0 +1,17 @@
+{
+    "version": "2.0.0",
+    "label": "Build",
+    "type": "shell",
+    "windows": 
+    {
+        "command": ".\\MakefileWin.bat",
+    },
+    "osx": 
+    {
+        "command": "make -f MakefileMac" 
+    },
+    "group": {
+        "kind": "build",
+        "isDefault": true
+    }   
+}
