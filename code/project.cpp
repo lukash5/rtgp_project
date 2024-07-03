@@ -111,7 +111,7 @@ void SetupShader(int shader_program);
 void PrintCurrentShader(int subroutine);
 
 // in this application, we have isolated the models rendering using a function, which will be called in each rendering step
-void RenderObjects(Shader &shader, Model &planeModel, Model &cubeModel, Model &sphereModel, Model &bunnyModel, GLint render_pass, GLuint depthMap);
+void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint render_pass, GLuint depthMap);
 
 // load image from disk and create an OpenGL texture
 GLint LoadTexture(const char* path);
@@ -142,17 +142,13 @@ GLboolean wireframe = GL_FALSE;
 glm::mat4 view = glm::mat4(1.0f);
 
 // Model and Normal transformation matrices for the objects in the scene: we set to identity
-glm::mat4 sphereModelMatrix = glm::mat4(1.0f);
-glm::mat3 sphereNormalMatrix = glm::mat3(1.0f);
-glm::mat4 cubeModelMatrix = glm::mat4(1.0f);
-glm::mat3 cubeNormalMatrix = glm::mat3(1.0f);
-glm::mat4 bunnyModelMatrix = glm::mat4(1.0f);
-glm::mat3 bunnyNormalMatrix = glm::mat3(1.0f);
+glm::mat4 sponzaModelMatrix = glm::mat4(1.0f);
+glm::mat3 sponzaNormalMatrix = glm::mat3(1.0f);
 glm::mat4 planeModelMatrix = glm::mat4(1.0f);
 glm::mat3 planeNormalMatrix = glm::mat3(1.0f);
 
 // we create a camera. We pass the initial position as a paramenter to the constructor. The last boolean tells if we want a camera "anchored" to the ground
-Camera camera(glm::vec3(0.0f, 0.0f, 7.0f), GL_TRUE);
+Camera camera(glm::vec3(0.0f, 0.0f, 7.0f), GL_FALSE);
 
 // in this example, we consider a directional light. We pass the direction of incoming light as an uniform to the shaders
 glm::vec3 lightDir0 = glm::vec3(1.0f, 1.0f, 1.0f);
@@ -228,18 +224,16 @@ int main()
 
     // we parse the Shader Program to search for the number and names of the subroutines.
     // the names are placed in the shaders vector
-    SetupShader(illumination_shader.Program);
+    SetupShader(illumination_shader.ID);
     // we print on console the name of the first subroutine used
     PrintCurrentShader(current_subroutine);
 
     // we load the images and store them in a vector
-    textureID.push_back(LoadTexture("../textures/UV_Grid_Sm.png"));
+    // textureID.push_back(LoadTexture("../textures/UV_Grid_Sm.png"));
     textureID.push_back(LoadTexture("../textures/SoilCracked.png"));
 
     // we load the model(s) (code of Model class is in include/utils/model.h)
-    Model cubeModel("../models/cube.obj");
-    Model sphereModel("../models/sphere.obj");
-    Model bunnyModel("../models/bunny_lp.obj");
+    Model sponzaModel("../models/sponza/sponza.obj");
     Model planeModel("../models/plane.obj");
 
     /////////////////// CREATION OF BUFFER FOR THE  DEPTH MAP /////////////////////////////////////////
@@ -308,7 +302,7 @@ int main()
         /// We "install" the  Shader Program for the shadow mapping creation
         shadow_shader.Use();
         // we pass the transformation matrix as uniform
-        glUniformMatrix4fv(glGetUniformLocation(shadow_shader.Program, "lightSpaceMatrix"), 1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
+        glUniformMatrix4fv(glGetUniformLocation(shadow_shader.ID, "lightSpaceMatrix"), 1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
         // we set the viewport for the first rendering step = dimensions of the depth texture
         glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
         // we activate the FBO for the depth map rendering
@@ -316,7 +310,7 @@ int main()
         glClear(GL_DEPTH_BUFFER_BIT);
 
         // we render the scene, using the shadow shader
-        RenderObjects(shadow_shader, planeModel, cubeModel, sphereModel, bunnyModel, SHADOWMAP, depthMap);
+        RenderObjects(shadow_shader, planeModel, sponzaModel, SHADOWMAP, depthMap);
 
         /////////////////// STEP 2 - SCENE RENDERING FROM CAMERA ////////////////////////////////////////////////
 
@@ -346,20 +340,20 @@ int main()
         // We "install" the selected Shader Program as part of the current rendering process. We pass to the shader the light transformation matrix, and the depth map rendered in the first rendering step
         illumination_shader.Use();
          // we search inside the Shader Program the name of the subroutine currently selected, and we get the numerical index
-        GLuint index = glGetSubroutineIndex(illumination_shader.Program, GL_FRAGMENT_SHADER, shaders[current_subroutine].c_str());
+        GLuint index = glGetSubroutineIndex(illumination_shader.ID, GL_FRAGMENT_SHADER, shaders[current_subroutine].c_str());
         // we activate the subroutine using the index (this is where shaders swapping happens)
         glUniformSubroutinesuiv( GL_FRAGMENT_SHADER, 1, &index);
 
         // we pass projection and view matrices to the Shader Program
-        glUniformMatrix4fv(glGetUniformLocation(illumination_shader.Program, "projectionMatrix"), 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(glGetUniformLocation(illumination_shader.Program, "viewMatrix"), 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(glGetUniformLocation(illumination_shader.Program, "lightSpaceMatrix"), 1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
+        glUniformMatrix4fv(glGetUniformLocation(illumination_shader.ID, "projectionMatrix"), 1, GL_FALSE, glm::value_ptr(projection));
+        glUniformMatrix4fv(glGetUniformLocation(illumination_shader.ID, "viewMatrix"), 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(illumination_shader.ID, "lightSpaceMatrix"), 1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
 
         // we determine the position in the Shader Program of the uniform variables
-        GLint lightDirLocation = glGetUniformLocation(illumination_shader.Program, "lightVector");
-        GLint kdLocation = glGetUniformLocation(illumination_shader.Program, "Kd");
-        GLint alphaLocation = glGetUniformLocation(illumination_shader.Program, "alpha");
-        GLint f0Location = glGetUniformLocation(illumination_shader.Program, "F0");
+        GLint lightDirLocation = glGetUniformLocation(illumination_shader.ID, "lightVector");
+        GLint kdLocation = glGetUniformLocation(illumination_shader.ID, "Kd");
+        GLint alphaLocation = glGetUniformLocation(illumination_shader.ID, "alpha");
+        GLint f0Location = glGetUniformLocation(illumination_shader.ID, "F0");
 
         // we assign the value to the uniform variables
         glUniform3fv(lightDirLocation, 1, glm::value_ptr(lightDir0));
@@ -368,7 +362,7 @@ int main()
         glUniform1f(f0Location, F0);
 
         // we render the scene
-        RenderObjects(illumination_shader, planeModel, cubeModel, sphereModel, bunnyModel, RENDER, depthMap);
+        RenderObjects(illumination_shader, planeModel, sponzaModel, RENDER, depthMap);
 
         // Swapping back and front buffers
         glfwSwapBuffers(window);
@@ -386,26 +380,26 @@ int main()
 
 //////////////////////////////////////////
 // we render the objects. We pass also the current rendering step, and the depth map generated in the first step, which is used by the shaders of the second step
-void RenderObjects(Shader &shader, Model &planeModel, Model &cubeModel, Model &sphereModel, Model &bunnyModel, GLint render_pass, GLuint depthMap)
+void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint render_pass, GLuint depthMap)
 {
     // For the second rendering step -> we pass the shadow map to the shaders
     if (render_pass==RENDER)
     {
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, depthMap);
-        GLint shadowLocation = glGetUniformLocation(shader.Program, "shadowMap");
+        GLint shadowLocation = glGetUniformLocation(shader.ID, "shadowMap");
         glUniform1i(shadowLocation, 2);
     }
     // we pass the needed uniforms
-    GLint textureLocation = glGetUniformLocation(shader.Program, "tex");
-    GLint repeatLocation = glGetUniformLocation(shader.Program, "repeat");
+    GLint textureLocation = glGetUniformLocation(shader.ID, "tex");
+    GLint repeatLocation = glGetUniformLocation(shader.ID, "repeat");
 
     // PLANE
     // we activate the texture of the plane
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, textureID[1]);
+    glBindTexture(GL_TEXTURE_2D, textureID[0]);
     glUniform1i(textureLocation, 1);
-    glUniform1f(repeatLocation, 80.0);
+    glUniform1f(repeatLocation, 1.0);
 
     /*
       we create the transformation matrix
@@ -422,58 +416,31 @@ void RenderObjects(Shader &shader, Model &planeModel, Model &cubeModel, Model &s
     planeModelMatrix = glm::translate(planeModelMatrix, glm::vec3(0.0f, -1.0f, 0.0f));
     planeModelMatrix = glm::scale(planeModelMatrix, glm::vec3(10.0f, 1.0f, 10.0f));
     planeNormalMatrix = glm::inverseTranspose(glm::mat3(view*planeModelMatrix));
-    glUniformMatrix4fv(glGetUniformLocation(shader.Program, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(planeModelMatrix));
-    glUniformMatrix3fv(glGetUniformLocation(shader.Program, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(planeNormalMatrix));
+    glUniformMatrix4fv(glGetUniformLocation(shader.ID, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(planeModelMatrix));
+    glUniformMatrix3fv(glGetUniformLocation(shader.ID, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(planeNormalMatrix));
     // we render the plane
-    planeModel.Draw();
+    planeModel.Draw(shader);
 
     // SPHERE
     // we activate the texture of the object
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, textureID[0]);
-    glUniform1i(textureLocation, 0);
-    glUniform1f(repeatLocation, repeat);
+    // glActiveTexture(GL_TEXTURE0);
+    // glBindTexture(GL_TEXTURE_2D, textureID[0]);
+    // glUniform1i(textureLocation, 0);
+    // glUniform1f(repeatLocation, repeat);
 
+    // SPONZA
     // we reset to identity at each frame
-    sphereModelMatrix = glm::mat4(1.0f);
-    sphereNormalMatrix = glm::mat3(1.0f);
-    sphereModelMatrix = glm::translate(sphereModelMatrix, glm::vec3(-3.0f, 1.0f, 0.0f));
-    sphereModelMatrix = glm::rotate(sphereModelMatrix, glm::radians(orientationY), glm::vec3(0.0f, 1.0f, 0.0f));
-    sphereModelMatrix = glm::scale(sphereModelMatrix, glm::vec3(0.8f, 0.8f, 0.8f));
-    sphereNormalMatrix = glm::inverseTranspose(glm::mat3(view*sphereModelMatrix));
-    glUniformMatrix4fv(glGetUniformLocation(shader.Program, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(sphereModelMatrix));
-    glUniformMatrix3fv(glGetUniformLocation(shader.Program, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(sphereNormalMatrix));
-
-    // we render the sphere
-    sphereModel.Draw();
-
-    // CUBE
-    // we reset to identity at each frame
-    cubeModelMatrix = glm::mat4(1.0f);
-    cubeNormalMatrix = glm::mat3(1.0f);
-    cubeModelMatrix = glm::translate(cubeModelMatrix, glm::vec3(0.0f, 1.0f, 0.0f));
-    cubeModelMatrix = glm::rotate(cubeModelMatrix, glm::radians(orientationY), glm::vec3(0.0f, 1.0f, 0.0f));
-    cubeModelMatrix = glm::scale(cubeModelMatrix, glm::vec3(0.8f, 0.8f, 0.8f));
-    cubeNormalMatrix = glm::inverseTranspose(glm::mat3(view*cubeModelMatrix));
-    glUniformMatrix4fv(glGetUniformLocation(shader.Program, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(cubeModelMatrix));
-    glUniformMatrix3fv(glGetUniformLocation(shader.Program, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(cubeNormalMatrix));
-
-    // we render the cube
-    cubeModel.Draw();
-
-    // BUNNY
-    // we reset to identity at each frame
-    bunnyModelMatrix = glm::mat4(1.0f);
-    bunnyNormalMatrix = glm::mat3(1.0f);
-    bunnyModelMatrix = glm::translate(bunnyModelMatrix, glm::vec3(3.0f, 1.0f, 0.0f));
-    bunnyModelMatrix = glm::rotate(bunnyModelMatrix, glm::radians(orientationY), glm::vec3(0.0f, 1.0f, 0.0f));
-    bunnyModelMatrix = glm::scale(bunnyModelMatrix, glm::vec3(0.3f, 0.3f, 0.3f));
-    bunnyNormalMatrix = glm::inverseTranspose(glm::mat3(view*bunnyModelMatrix));
-    glUniformMatrix4fv(glGetUniformLocation(shader.Program, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(bunnyModelMatrix));
-    glUniformMatrix3fv(glGetUniformLocation(shader.Program, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(bunnyNormalMatrix));
+    sponzaModelMatrix = glm::mat4(1.0f);
+    sponzaNormalMatrix = glm::mat3(1.0f);
+    // bunnyModelMatrix = glm::translate(bunnyModelMatrix, glm::vec3(0.0f, 1.0f, 0.0f));
+    // bunnyModelMatrix = glm::rotate(bunnyModelMatrix, glm::radians(orientationY), glm::vec3(0.0f, 1.0f, 0.0f));
+    sponzaModelMatrix = glm::scale(sponzaModelMatrix, glm::vec3(0.01f, 0.01f, 0.01f));
+    sponzaNormalMatrix = glm::inverseTranspose(glm::mat3(view*sponzaModelMatrix));
+    glUniformMatrix4fv(glGetUniformLocation(shader.ID, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(sponzaModelMatrix));
+    glUniformMatrix3fv(glGetUniformLocation(shader.ID, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(sponzaNormalMatrix));
 
     // we render the bunny
-    bunnyModel.Draw();
+    sponzaModel.Draw(shader);
 
 }
 
