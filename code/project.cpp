@@ -86,6 +86,7 @@ positive Z axis points "outside" the screen
 // we include the library for images loading
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image/stb_image.h>
+#include <random>
 
 // dimensions of application's window
 GLuint screenWidth = 1200, screenHeight = 900;
@@ -111,7 +112,10 @@ void SetupShader(int shader_program);
 void PrintCurrentShader(int subroutine);
 
 // in this application, we have isolated the models rendering using a function, which will be called in each rendering step
-void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint render_pass, GLuint depthMap);
+void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, 
+                    GLint render_pass, GLuint depthMap);
+void RenderQuad();
+
 
 // load image from disk and create an OpenGL texture
 GLint LoadTexture(const char* path);
@@ -148,10 +152,11 @@ glm::mat4 planeModelMatrix = glm::mat4(1.0f);
 glm::mat3 planeNormalMatrix = glm::mat3(1.0f);
 
 // we create a camera. We pass the initial position as a paramenter to the constructor. The last boolean tells if we want a camera "anchored" to the ground
-Camera camera(glm::vec3(0.0f, 0.0f, 7.0f), GL_FALSE);
+Camera camera(glm::vec3(-5.4f, 3.12f, -0.36), GL_FALSE);
 
 // in this example, we consider a directional light. We pass the direction of incoming light as an uniform to the shaders
 glm::vec3 lightDir0 = glm::vec3(1.0f, 1.0f, 1.0f);
+glm::vec3 pointLight = glm::vec3(-5.0f, 3.0f, 0.0f);
 
 // weight for the diffusive component
 GLfloat Kd = 3.0f;
@@ -165,6 +170,13 @@ vector<GLint> textureID;
 
 // UV repetitions
 GLfloat repeat = 1.0;
+
+bool enableSSAO = GL_TRUE;
+
+float ourLerp(float a, float b, float f)
+{
+    return a + f * (b - a);
+}
 
 /////////////////// MAIN function ///////////////////////
 int main()
@@ -221,6 +233,17 @@ int main()
     Shader shadow_shader("19_shadowmap.vert", "20_shadowmap.frag");
     // we create the Shader Program used for objects (which presents different subroutines we can switch)
     Shader illumination_shader = Shader("21_ggx_tex_shadow.vert", "22_ggx_tex_shadow.frag");
+    Shader shaderSSAO("23_ssao.vs", "24_ssao.fs");
+    Shader shaderSSAOBlur("23_ssao.vs", "25_ssao_blur.fs");
+
+    // shader configuration
+    // --------------------
+    shaderSSAO.Use();
+    shaderSSAO.setInt("gPosition", 0);
+    shaderSSAO.setInt("gNormal", 1);
+    shaderSSAO.setInt("texNoise", 2);
+    shaderSSAOBlur.Use();
+    shaderSSAOBlur.setInt("ssaoInput", 0);
 
     // we parse the Shader Program to search for the number and names of the subroutines.
     // the names are placed in the shaders vector
@@ -267,7 +290,112 @@ int main()
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+
+    // configure g-buffer framebuffer
+    // ------------------------------
+    unsigned int gBuffer;
+    glGenFramebuffers(1, &gBuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
+    unsigned int gPosition, gNormal, gAlbedo;
+    // position color buffer
+    glGenTextures(1, &gPosition);
+    glBindTexture(GL_TEXTURE_2D, gPosition);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, screenWidth, screenHeight, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gPosition, 0);
+    // normal color buffer
+    glGenTextures(1, &gNormal);
+    glBindTexture(GL_TEXTURE_2D, gNormal);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, screenWidth, screenHeight, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, gNormal, 0);
+    // color + specular color buffer
+    glGenTextures(1, &gAlbedo);
+    glBindTexture(GL_TEXTURE_2D, gAlbedo);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenWidth, screenHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, gAlbedo, 0);
+    // tell OpenGL which color attachments we'll use (of this framebuffer) for rendering 
+    unsigned int attachments[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
+    glDrawBuffers(3, attachments);
+    // create and attach depth buffer (renderbuffer)
+    unsigned int rboDepth;
+    glGenRenderbuffers(1, &rboDepth);
+    glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, screenWidth, screenHeight);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
+    // finally check if framebuffer is complete
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cout << "Framebuffer not complete!" << std::endl;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     ///////////////////////////////////////////////////////////////////
+    // also create framebuffer to hold SSAO processing stage 
+    // -----------------------------------------------------
+    unsigned int ssaoFBO, ssaoBlurFBO;
+    glGenFramebuffers(1, &ssaoFBO);  glGenFramebuffers(1, &ssaoBlurFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, ssaoFBO);
+    unsigned int ssaoColorBuffer, ssaoColorBufferBlur;
+    // SSAO color buffer
+    glGenTextures(1, &ssaoColorBuffer);
+    glBindTexture(GL_TEXTURE_2D, ssaoColorBuffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, screenWidth, screenHeight, 0, GL_RED, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ssaoColorBuffer, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cout << "SSAO Framebuffer not complete!" << std::endl;
+    // and blur stage
+    glBindFramebuffer(GL_FRAMEBUFFER, ssaoBlurFBO);
+    glGenTextures(1, &ssaoColorBufferBlur);
+    glBindTexture(GL_TEXTURE_2D, ssaoColorBufferBlur);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, screenWidth, screenHeight, 0, GL_RED, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ssaoColorBufferBlur, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cout << "SSAO Blur Framebuffer not complete!" << std::endl;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // generate sample kernel
+    // ----------------------
+    std::uniform_real_distribution<GLfloat> randomFloats(0.0, 1.0); // generates random floats between 0.0 and 1.0
+    std::default_random_engine generator;
+    std::vector<glm::vec3> ssaoKernel;
+    for (unsigned int i = 0; i < 64; ++i)
+    {
+        glm::vec3 sample(randomFloats(generator) * 2.0 - 1.0, randomFloats(generator) * 2.0 - 1.0, randomFloats(generator));
+        sample = glm::normalize(sample);
+        sample *= randomFloats(generator);
+        float scale = float(i) / 64.0f;
+
+        // scale samples s.t. they're more aligned to center of kernel
+        scale = ourLerp(0.1f, 1.0f, scale * scale);
+        sample *= scale;
+        ssaoKernel.push_back(sample);
+    }
+
+    // generate noise texture
+    // ----------------------
+    std::vector<glm::vec3> ssaoNoise;
+    for (unsigned int i = 0; i < 16; i++)
+    {
+        glm::vec3 noise(randomFloats(generator) * 2.0 - 1.0, randomFloats(generator) * 2.0 - 1.0, 0.0f); // rotate around z-axis (in tangent space)
+        ssaoNoise.push_back(noise);
+    }
+    unsigned int noiseTexture; 
+    glGenTextures(1, &noiseTexture);
+    glBindTexture(GL_TEXTURE_2D, noiseTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, 4, 0, GL_RGB, GL_FLOAT, &ssaoNoise[0]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
 
     // Projection matrix of the camera: FOV angle, aspect ratio, near and far planes
@@ -281,6 +409,8 @@ int main()
         GLfloat currentFrame = glfwGetTime();
         deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
+
+        // std::cout << camera.Position.x << ", " << camera.Position.y << ", " << camera.Position.z << std::endl;
 
         // Check is an I/O event is happening
         glfwPollEvents();
@@ -302,7 +432,8 @@ int main()
         /// We "install" the  Shader Program for the shadow mapping creation
         shadow_shader.Use();
         // we pass the transformation matrix as uniform
-        glUniformMatrix4fv(glGetUniformLocation(shadow_shader.ID, "lightSpaceMatrix"), 1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
+        // glUniformMatrix4fv(glGetUniformLocation(shadow_shader.ID, "lightSpaceMatrix"), 1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
+        shadow_shader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
         // we set the viewport for the first rendering step = dimensions of the depth texture
         glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
         // we activate the FBO for the depth map rendering
@@ -311,6 +442,37 @@ int main()
 
         // we render the scene, using the shadow shader
         RenderObjects(shadow_shader, planeModel, sponzaModel, SHADOWMAP, depthMap);
+
+        // 2. generate SSAO texture
+        // ------------------------
+        glBindFramebuffer(GL_FRAMEBUFFER, ssaoFBO);
+            glClear(GL_COLOR_BUFFER_BIT);
+            shaderSSAO.Use();
+            shaderSSAO.setMat4("view", view);
+            shaderSSAO.setMat4("inverseView", glm::inverse(view));
+            shaderSSAO.setBool("enableSSAO", enableSSAO);
+            // Send kernel + rotation 
+            for (unsigned int i = 0; i < 64; ++i)
+                shaderSSAO.setVec3("samples[" + std::to_string(i) + "]", ssaoKernel[i]);
+            shaderSSAO.setMat4("projection", projection);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, gPosition);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, gNormal);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, noiseTexture);
+            RenderObjects(shaderSSAO, planeModel, sponzaModel, SHADOWMAP, depthMap);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        // 3. blur SSAO texture to remove noise
+        // ------------------------------------
+        glBindFramebuffer(GL_FRAMEBUFFER, ssaoBlurFBO);
+            glClear(GL_COLOR_BUFFER_BIT);
+            shaderSSAOBlur.Use();
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, ssaoColorBuffer);
+            RenderObjects(shaderSSAOBlur, planeModel, sponzaModel, SHADOWMAP, depthMap);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
         /////////////////// STEP 2 - SCENE RENDERING FROM CAMERA ////////////////////////////////////////////////
 
@@ -330,10 +492,6 @@ int main()
         else
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
-        // if animated rotation is activated, than we increment the rotation angle using delta time and the rotation speed parameter
-        if (spinning)
-            orientationY+=(deltaTime*spin_speed);
-
         // we set the viewport for the final rendering step
         glViewport(0, 0, width, height);
 
@@ -345,21 +503,20 @@ int main()
         glUniformSubroutinesuiv( GL_FRAGMENT_SHADER, 1, &index);
 
         // we pass projection and view matrices to the Shader Program
-        glUniformMatrix4fv(glGetUniformLocation(illumination_shader.ID, "projectionMatrix"), 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(glGetUniformLocation(illumination_shader.ID, "viewMatrix"), 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(glGetUniformLocation(illumination_shader.ID, "lightSpaceMatrix"), 1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
+        illumination_shader.setMat4("projectionMatrix", projection);
+        illumination_shader.setMat4("viewMatrix", view);
+        illumination_shader.setMat4("lightSpaceMatrix", lightSpaceMatrix);
 
         // we determine the position in the Shader Program of the uniform variables
-        GLint lightDirLocation = glGetUniformLocation(illumination_shader.ID, "lightVector");
-        GLint kdLocation = glGetUniformLocation(illumination_shader.ID, "Kd");
-        GLint alphaLocation = glGetUniformLocation(illumination_shader.ID, "alpha");
-        GLint f0Location = glGetUniformLocation(illumination_shader.ID, "F0");
+        illumination_shader.setFloat("F0", F0);
+        illumination_shader.setFloat("alpha", alpha);
+        illumination_shader.setFloat("Kd", Kd);
+        illumination_shader.setVec3("lightVector", lightDir0);
 
-        // we assign the value to the uniform variables
-        glUniform3fv(lightDirLocation, 1, glm::value_ptr(lightDir0));
-        glUniform1f(kdLocation, Kd);
-        glUniform1f(alphaLocation, alpha);
-        glUniform1f(f0Location, F0);
+        glActiveTexture(GL_TEXTURE3); // add extra SSAO texture to lighting pass
+        glBindTexture(GL_TEXTURE_2D, ssaoColorBufferBlur);
+        illumination_shader.setInt("ssaoTexture", 3);
+        illumination_shader.setBool("enableSSAO", enableSSAO);
 
         // we render the scene
         RenderObjects(illumination_shader, planeModel, sponzaModel, RENDER, depthMap);
@@ -372,6 +529,8 @@ int main()
     // we delete the Shader Programs
     illumination_shader.Delete();
     shadow_shader.Delete();
+    shaderSSAO.Delete();
+    shaderSSAOBlur.Delete();
     // chiudo e cancello il contesto creato
     glfwTerminate();
     return 0;
@@ -383,34 +542,28 @@ int main()
 void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint render_pass, GLuint depthMap)
 {
     // For the second rendering step -> we pass the shadow map to the shaders
-    if (render_pass==RENDER)
-    {
+    if (render_pass == RENDER) {
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, depthMap);
-        GLint shadowLocation = glGetUniformLocation(shader.ID, "shadowMap");
-        glUniform1i(shadowLocation, 2);
+        shader.setInt("shadowMap", 2);
     }
-    // we pass the needed uniforms
-    GLint textureLocation = glGetUniformLocation(shader.ID, "tex");
-    GLint repeatLocation = glGetUniformLocation(shader.ID, "repeat");
-
     // PLANE
     // we activate the texture of the plane
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, textureID[0]);
-    glUniform1i(textureLocation, 1);
-    glUniform1f(repeatLocation, 1.0);
+    shader.setFloat("tex", 1);
+    shader.setFloat("repeat", 1.0);
 
-    /*
-      we create the transformation matrix
+    // /*
+    //   we create the transformation matrix
 
-      N.B.) the last defined is the first applied
+    //   N.B.) the last defined is the first applied
 
-      We need also the matrix for normals transformation, which is the inverse of the transpose of the 3x3 submatrix (upper left) of the modelview. We do not consider the 4th column because we do not need translations for normals.
-      An explanation (where XT means the transpose of X, etc):
-        "Two column vectors X and Y are perpendicular if and only if XT.Y=0. If We're going to transform X by a matrix M, we need to transform Y by some matrix N so that (M.X)T.(N.Y)=0. Using the identity (A.B)T=BT.AT, this becomes (XT.MT).(N.Y)=0 => XT.(MT.N).Y=0. If MT.N is the identity matrix then this reduces to XT.Y=0. And MT.N is the identity matrix if and only if N=(MT)-1, i.e. N is the inverse of the transpose of M.
-    */
-    // we reset to identity at each frame
+    //   We need also the matrix for normals transformation, which is the inverse of the transpose of the 3x3 submatrix (upper left) of the modelview. We do not consider the 4th column because we do not need translations for normals.
+    //   An explanation (where XT means the transpose of X, etc):
+    //     "Two column vectors X and Y are perpendicular if and only if XT.Y=0. If We're going to transform X by a matrix M, we need to transform Y by some matrix N so that (M.X)T.(N.Y)=0. Using the identity (A.B)T=BT.AT, this becomes (XT.MT).(N.Y)=0 => XT.(MT.N).Y=0. If MT.N is the identity matrix then this reduces to XT.Y=0. And MT.N is the identity matrix if and only if N=(MT)-1, i.e. N is the inverse of the transpose of M.
+    // */
+    // // we reset to identity at each frame
     planeModelMatrix = glm::mat4(1.0f);
     planeNormalMatrix = glm::mat3(1.0f);
     planeModelMatrix = glm::translate(planeModelMatrix, glm::vec3(0.0f, -1.0f, 0.0f));
@@ -421,25 +574,16 @@ void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint 
     // we render the plane
     planeModel.Draw(shader);
 
-    // SPHERE
-    // we activate the texture of the object
-    // glActiveTexture(GL_TEXTURE0);
-    // glBindTexture(GL_TEXTURE_2D, textureID[0]);
-    // glUniform1i(textureLocation, 0);
-    // glUniform1f(repeatLocation, repeat);
-
     // SPONZA
     // we reset to identity at each frame
     sponzaModelMatrix = glm::mat4(1.0f);
     sponzaNormalMatrix = glm::mat3(1.0f);
-    // bunnyModelMatrix = glm::translate(bunnyModelMatrix, glm::vec3(0.0f, 1.0f, 0.0f));
-    // bunnyModelMatrix = glm::rotate(bunnyModelMatrix, glm::radians(orientationY), glm::vec3(0.0f, 1.0f, 0.0f));
     sponzaModelMatrix = glm::scale(sponzaModelMatrix, glm::vec3(0.01f, 0.01f, 0.01f));
     sponzaNormalMatrix = glm::inverseTranspose(glm::mat3(view*sponzaModelMatrix));
     glUniformMatrix4fv(glGetUniformLocation(shader.ID, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(sponzaModelMatrix));
     glUniformMatrix3fv(glGetUniformLocation(shader.ID, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(sponzaNormalMatrix));
 
-    // we render the bunny
+    // we render the sponza model
     sponzaModel.Draw(shader);
 
 }
@@ -568,11 +712,16 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
     // if P is pressed, we start/stop the animated rotation of models
     if(key == GLFW_KEY_P && action == GLFW_PRESS)
-        spinning=!spinning;
+        spinning = !spinning;
 
     // if L is pressed, we activate/deactivate wireframe rendering of models
     if(key == GLFW_KEY_L && action == GLFW_PRESS)
-        wireframe=!wireframe;
+        wireframe = !wireframe;
+
+    if(key == GLFW_KEY_H && action == GLFW_PRESS) {
+        std::cout << "Switched SSAO: " << (enableSSAO ? "ON" : "OFF") << std::endl;
+        enableSSAO = ! enableSSAO;
+    }
 
     // pressing a key number, we change the shader applied to the models
     // if the key is between 1 and 9, we proceed and check if the pressed key corresponds to

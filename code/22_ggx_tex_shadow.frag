@@ -43,9 +43,14 @@ uniform sampler2D tex;
 // texture sampler for the depth map
 uniform sampler2D shadowMap;
 
+// SSAO texture sampler
+uniform sampler2D ssaoTexture;
+
 uniform float alpha; // rugosity - 0 : smooth, 1: rough
 uniform float F0; // fresnel reflectance at normal incidence
 uniform float Kd; // weight of diffuse reflection
+
+uniform bool enableSSAO;
 
 ////////////////////////////////////////////////////////////////////
 
@@ -224,16 +229,19 @@ void main()
         shadow = Shadow_Calculation();
     }
 
+    // Read SSAO value
+    float ssao = enableSSAO ? texture(ssaoTexture, repeated_UV).r : 1.0;   
+    //lambert = vec3(0.3 * lambert * ssao);
+
     // the rendering equation is:
-    //integral of: BRDF * Li * (cosine angle between N and L)
+    // integral of: BRDF * Li * (cosine angle between N and L)
     // BRDF in our case is: the sum of Lambert and GGX
     // Li is considered as equal to 1: light is white, and we have not applied attenuation. With colored lights, and with attenuation, the code must be modified and the Li factor must be multiplied to finalColor
     //We weight using the shadow value
     // N.B. ) shadow value = 1 -> fragment is in shadow
     //        shadow value = 0 -> fragment is in light
     // Therefore, we use (1-shadow) as weight to apply to the illumination model
-    vec3 finalColor = (1.0 - shadow)*(lambert + specular)*NdotL;
-
+    vec3 finalColor = (1.0 - shadow) * (lambert * ssao + specular) * NdotL;
 
     colorFrag = vec4(finalColor, 1.0);
 }

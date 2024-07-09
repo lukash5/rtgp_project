@@ -53,7 +53,7 @@ out vec2 interp_UV;
 out vec4 posLightSpace;
 
 
-void main(){
+void main() {
 
   // vertex position in world coordinates
   vec4 mPosition = modelMatrix * vec4( position, 1.0 );
