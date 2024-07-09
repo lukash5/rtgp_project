@@ -230,8 +230,7 @@ void main()
     }
 
     // Read SSAO value
-    float ssao = enableSSAO ? texture(ssaoTexture, repeated_UV).r : 1.0;   
-    //lambert = vec3(0.3 * lambert * ssao);
+    float ssao = texture(ssaoTexture, repeated_UV).r;
 
     // the rendering equation is:
     // integral of: BRDF * Li * (cosine angle between N and L)
@@ -241,7 +240,11 @@ void main()
     // N.B. ) shadow value = 1 -> fragment is in shadow
     //        shadow value = 0 -> fragment is in light
     // Therefore, we use (1-shadow) as weight to apply to the illumination model
-    vec3 finalColor = (1.0 - shadow) * (lambert * ssao + specular) * NdotL;
+    vec3 ambient = vec3(0.0);
+    if (enableSSAO) {
+        ambient = vec3(0.3 * surfaceColor.rgb * ssao);
+    }
+    vec3 finalColor = ambient + (1.0 - shadow) * (lambert + specular) * NdotL;
 
     colorFrag = vec4(finalColor, 1.0);
 }

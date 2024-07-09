@@ -92,7 +92,7 @@ positive Z axis points "outside" the screen
 GLuint screenWidth = 1200, screenHeight = 900;
 
 // the rendering steps used in the application
-enum render_passes{ SHADOWMAP, RENDER};
+enum render_passes{SHADOWMAP, RENDER};
 
 // callback functions for keyboard and mouse events
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mode);
@@ -112,9 +112,7 @@ void SetupShader(int shader_program);
 void PrintCurrentShader(int subroutine);
 
 // in this application, we have isolated the models rendering using a function, which will be called in each rendering step
-void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, 
-                    GLint render_pass, GLuint depthMap);
-void RenderQuad();
+void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint render_pass, GLuint depthMap);
 
 
 // load image from disk and create an OpenGL texture
@@ -132,13 +130,6 @@ bool firstMouse = true;
 GLfloat deltaTime = 0.0f;
 GLfloat lastFrame = 0.0f;
 
-// rotation angle on Y axis
-GLfloat orientationY = 0.0f;
-// rotation speed on Y axis
-GLfloat spin_speed = 30.0f;
-// boolean to start/stop animated rotation on Y angle
-GLboolean spinning = GL_TRUE;
-
 // boolean to activate/deactivate wireframe rendering
 GLboolean wireframe = GL_FALSE;
 
@@ -155,8 +146,7 @@ glm::mat3 planeNormalMatrix = glm::mat3(1.0f);
 Camera camera(glm::vec3(-5.4f, 3.12f, -0.36), GL_FALSE);
 
 // in this example, we consider a directional light. We pass the direction of incoming light as an uniform to the shaders
-glm::vec3 lightDir0 = glm::vec3(1.0f, 1.0f, 1.0f);
-glm::vec3 pointLight = glm::vec3(-5.0f, 3.0f, 0.0f);
+glm::vec3 lightDir0 = glm::vec3(1.0f, 0.5f, 1.0f);
 
 // weight for the diffusive component
 GLfloat Kd = 3.0f;
@@ -172,6 +162,8 @@ vector<GLint> textureID;
 GLfloat repeat = 1.0;
 
 bool enableSSAO = GL_TRUE;
+
+int kernelSize = 512;
 
 float ourLerp(float a, float b, float f)
 {
@@ -261,6 +253,7 @@ int main()
 
     /////////////////// CREATION OF BUFFER FOR THE  DEPTH MAP /////////////////////////////////////////
     // buffer dimension: too large -> performance may slow down if we have many lights; too small -> strong aliasing
+    // Buffer dimensions
     const GLuint SHADOW_WIDTH = 1024, SHADOW_HEIGHT = 1024;
     GLuint depthMapFBO;
     // we create a Frame Buffer Object: the first rendering step will render to this buffer, and not to the real frame buffer
@@ -276,6 +269,7 @@ int main()
     // we set to clamp the uv coordinates outside [0,1] to the color of the border
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+
 
     // outside the area covered by the light frustum, everything is rendered in shadow (because we set GL_CLAMP_TO_BORDER)
     // thus, we set the texture border to white, so to render correctly everything not involved by the shadow map
@@ -367,12 +361,12 @@ int main()
     std::uniform_real_distribution<GLfloat> randomFloats(0.0, 1.0); // generates random floats between 0.0 and 1.0
     std::default_random_engine generator;
     std::vector<glm::vec3> ssaoKernel;
-    for (unsigned int i = 0; i < 64; ++i)
+    for (unsigned int i = 0; i < kernelSize; ++i)
     {
         glm::vec3 sample(randomFloats(generator) * 2.0 - 1.0, randomFloats(generator) * 2.0 - 1.0, randomFloats(generator));
         sample = glm::normalize(sample);
         sample *= randomFloats(generator);
-        float scale = float(i) / 64.0f;
+        float scale = float(i) / float(kernelSize);
 
         // scale samples s.t. they're more aligned to center of kernel
         scale = ourLerp(0.1f, 1.0f, scale * scale);
@@ -450,9 +444,8 @@ int main()
             shaderSSAO.Use();
             shaderSSAO.setMat4("view", view);
             shaderSSAO.setMat4("inverseView", glm::inverse(view));
-            shaderSSAO.setBool("enableSSAO", enableSSAO);
             // Send kernel + rotation 
-            for (unsigned int i = 0; i < 64; ++i)
+            for (unsigned int i = 0; i < kernelSize; ++i)
                 shaderSSAO.setVec3("samples[" + std::to_string(i) + "]", ssaoKernel[i]);
             shaderSSAO.setMat4("projection", projection);
             glActiveTexture(GL_TEXTURE0);
@@ -710,17 +703,13 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     if(key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
         glfwSetWindowShouldClose(window, GL_TRUE);
 
-    // if P is pressed, we start/stop the animated rotation of models
-    if(key == GLFW_KEY_P && action == GLFW_PRESS)
-        spinning = !spinning;
-
     // if L is pressed, we activate/deactivate wireframe rendering of models
     if(key == GLFW_KEY_L && action == GLFW_PRESS)
         wireframe = !wireframe;
 
     if(key == GLFW_KEY_H && action == GLFW_PRESS) {
         std::cout << "Switched SSAO: " << (enableSSAO ? "ON" : "OFF") << std::endl;
-        enableSSAO = ! enableSSAO;
+        enableSSAO = !enableSSAO;
     }
 
     // pressing a key number, we change the shader applied to the models
