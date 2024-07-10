@@ -1,20 +1,3 @@
-/*
-22_ggx_tex_shadow.frag: fragment shader for GGX illumination model, with shadow rendering using shadow map
-
-N.B. 1)  "21_ggx_tex_shadow.vert" must be used as vertex shader
-
-N.B. 2) the shader considers only a directional light (simpler to manage for the creation of the shadow map). For more lights, of different kind, the shader must be modified to consider each case
-
-N.B. 3)  the different effects are implemented using Shaders Subroutines
-
-author: Davide Gadia
-
-Real-Time Graphics Programming - a.a. 2023/2024
-Master degree in Computer Science
-Universita' degli Studi di Milano
-
-*/
-
 #version 410 core
 
 const float PI = 3.14159265359;
@@ -51,6 +34,20 @@ uniform float F0; // fresnel reflectance at normal incidence
 uniform float Kd; // weight of diffuse reflection
 
 uniform bool enableSSAO;
+uniform bool enablePointLight;
+
+struct PointLight {    
+    vec3 position;
+    
+    float constant;
+    float linear;
+    float quadratic;  
+
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
+};  
+uniform PointLight pointLight;
 
 ////////////////////////////////////////////////////////////////////
 
@@ -61,6 +58,29 @@ subroutine float shadow_map();
 subroutine uniform shadow_map Shadow_Calculation;
 
 ////////////////////////////////////////////////////////////////////
+
+// calculates the color when using a point light.
+vec3 CalcPointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir, float shadow)
+{
+    vec3 lightDir = normalize(light.position - fragPos);
+    // diffuse shading
+    float diff = max(dot(normal, lightDir), 0.0);
+    // specular shading
+    vec3 reflectDir = reflect(-lightDir, normal);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+    // attenuation
+    float distance = length(light.position - fragPos);
+    float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));    
+    attenuation = 0.1;
+    // combine results
+    vec3 ambient = light.ambient * vec3(texture(tex, interp_UV));
+    vec3 diffuse = light.diffuse * diff * vec3(texture(tex, interp_UV));
+    vec3 specular = light.specular * spec * vec3(texture(tex, interp_UV));
+    ambient *= attenuation;
+    diffuse *= attenuation;
+    specular *= attenuation;
+    return (ambient + diffuse + specular) * (1 - shadow);
+}
 
 //////////////////////////////////////////
 // it applies a very basic shadow mapping. The final result is heavily aliased (with a lot of "shadow acne"), and the areas outside the light frustum are rendered as in shadow
@@ -242,9 +262,17 @@ void main()
     // Therefore, we use (1-shadow) as weight to apply to the illumination model
     vec3 ambient = vec3(0.0);
     if (enableSSAO) {
-        ambient = vec3(0.3 * surfaceColor.rgb * ssao);
+        ambient = vec3(0.4 * surfaceColor.rgb * ssao);
     }
     vec3 finalColor = ambient + (1.0 - shadow) * (lambert + specular) * NdotL;
+
+    if (enablePointLight) {
+        // Calculate point light contribution
+        vec3 fragPos = vec3(gl_FragCoord.x, gl_FragCoord.y, gl_FragCoord.z);
+        vec3 pointLightColor = CalcPointLight(pointLight, N, fragPos, normalize(vViewPosition), shadow);
+
+        finalColor += pointLightColor;
+    }
 
     colorFrag = vec4(finalColor, 1.0);
 }

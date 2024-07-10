@@ -64,7 +64,7 @@ void main() {
   vViewPosition = -mvPosition.xyz;
 
   // transformations are applied to the normal
-  vNormal = normalize( normalMatrix * normal );
+  vNormal = normalize(normalMatrix * normal);
 
   // light incidence directions in view coordinate
   lightDir = vec3(viewMatrix  * vec4(lightVector, 0.0));

@@ -143,10 +143,30 @@ glm::mat4 planeModelMatrix = glm::mat4(1.0f);
 glm::mat3 planeNormalMatrix = glm::mat3(1.0f);
 
 // we create a camera. We pass the initial position as a paramenter to the constructor. The last boolean tells if we want a camera "anchored" to the ground
-Camera camera(glm::vec3(-5.4f, 3.12f, -0.36), GL_FALSE);
+Camera camera(glm::vec3(-1.0f, 3.0f, -0.50f), GL_FALSE);
 
 // in this example, we consider a directional light. We pass the direction of incoming light as an uniform to the shaders
 glm::vec3 lightDir0 = glm::vec3(1.0f, 0.5f, 1.0f);
+
+struct PointLight {    
+    glm::vec3 position;
+    
+    float constant;
+    float linear;
+    float quadratic;
+
+    glm::vec3 ambient;
+    glm::vec3 diffuse;
+    glm::vec3 specular; 
+};
+
+PointLight pointLight {
+    glm::vec3(-5.4f, 3.12f, -0.36f), 1.0f, 0.007f, 0.0017f,
+    glm::vec3(0.05f, 0.05f, 0.05f),
+    glm::vec3(0.8f, 0.8f, 0.8f),
+    glm::vec3(1.0f, 1.0f, 1.0f)
+};
+
 
 // weight for the diffusive component
 GLfloat Kd = 3.0f;
@@ -162,6 +182,7 @@ vector<GLint> textureID;
 GLfloat repeat = 1.0;
 
 bool enableSSAO = GL_TRUE;
+bool enablePointLight = GL_TRUE;
 
 int kernelSize = 512;
 
@@ -506,10 +527,20 @@ int main()
         illumination_shader.setFloat("Kd", Kd);
         illumination_shader.setVec3("lightVector", lightDir0);
 
+        illumination_shader.setVec3("pointLight.position", pointLight.position);
+        illumination_shader.setFloat("pointLight.constant", pointLight.constant);
+        illumination_shader.setFloat("pointLight.linear", pointLight.linear);
+        illumination_shader.setFloat("pointLight.constant", pointLight.constant);
+        illumination_shader.setFloat("pointLight.quadratic", pointLight.quadratic);
+        illumination_shader.setVec3("pointLight.ambient", pointLight.ambient);
+        illumination_shader.setVec3("pointLight.diffuse", pointLight.diffuse);
+        illumination_shader.setVec3("pointLight.specular", pointLight.specular);
+
         glActiveTexture(GL_TEXTURE3); // add extra SSAO texture to lighting pass
         glBindTexture(GL_TEXTURE_2D, ssaoColorBufferBlur);
         illumination_shader.setInt("ssaoTexture", 3);
         illumination_shader.setBool("enableSSAO", enableSSAO);
+        illumination_shader.setBool("enablePointLight", enablePointLight);
 
         // we render the scene
         RenderObjects(illumination_shader, planeModel, sponzaModel, RENDER, depthMap);
@@ -710,6 +741,10 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     if(key == GLFW_KEY_H && action == GLFW_PRESS) {
         std::cout << "Switched SSAO: " << (enableSSAO ? "ON" : "OFF") << std::endl;
         enableSSAO = !enableSSAO;
+    }
+    if(key == GLFW_KEY_J && action == GLFW_PRESS) {
+        std::cout << "Switched PointLight: " << (enablePointLight ? "ON" : "OFF") << std::endl;
+        enablePointLight = !enablePointLight;
     }
 
     // pressing a key number, we change the shader applied to the models
