@@ -1,54 +1,3 @@
-/*
-Es06a: shadow rendering with shadow mapping technique - PART 2
-- swapping (pressing keys from 1 to 3) between basic shadow mapping (with a lot of aliasing/shadow "acne"), adaptive bias to avoid shadow "acne", and PCF to smooth shadow borders
-- conclusion of Es05c, with object shaders now using the shadow map computed in the first rendering step
-
-N.B. 1)
-In this example we use Shaders Subroutines to do shader swapping:
-http://www.geeks3d.com/20140701/opengl-4-shader-subroutines-introduction-3d-programming-tutorial/
-https://www.lighthouse3d.com/tutorials/glsl-tutorial/subroutines/
-https://www.khronos.org/opengl/wiki/Shader_Subroutine
-
-In other cases, an alternative could be to consider Separate Shader Objects:
-https://www.informit.com/articles/article.aspx?p=2731929&seqNum=7
-https://www.khronos.org/opengl/wiki/Shader_Compilation#Separate_programs
-https://riptutorial.com/opengl/example/26979/load-separable-shader-in-cplusplus
-
-N.B. 2) the application considers only a directional light. In case of more lights, and/or of different nature, the code must be modifies
-
-N.B. 3)
-see :
-https://learnopengl.com/Advanced-Lighting/Shadows/Shadow-Mapping
-http://www.opengl-tutorial.org/intermediate-tutorials/tutorial-16-shadow-mapping/#basic-shadowmap
-https://docs.microsoft.com/en-us/windows/desktop/dxtecharts/common-techniques-to-improve-shadow-depth-maps
-for further details
-
-
-author: Davide Gadia
-
-Real-Time Graphics Programming - a.a. 2023/2024
-Master degree in Computer Science
-Universita' degli Studi di Milano
-*/
-
-/*
-OpenGL coordinate system (right-handed)
-positive X axis points right
-positive Y axis points up
-positive Z axis points "outside" the screen
-
-
-                              Y
-                              |
-                              |
-                              |________X
-                             /
-                            /
-                           /
-                          Z
-*/
-
-
 // Std. Includes
 #include <string>
 
@@ -167,6 +116,26 @@ PointLight pointLight {
     glm::vec3(1.0f, 1.0f, 1.0f)
 };
 
+/////////////////// Particles ///////////////////////
+unsigned int lastUsedParticle = 0;
+
+struct Particle {
+    glm::vec3 Position, Velocity;
+    glm::vec4 Color;
+    float     Life;
+  
+    Particle() 
+      : Position(0.0f), Velocity(0.0f), Color(1.0f), Life(0.0f) {}
+};  
+
+unsigned int FirstUnusedParticle();
+void RespawnParticle(Particle &particle, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 offset);
+unsigned int nr_particles = 100000;
+std::vector<Particle> particles;
+
+glm::vec3 emitterPosition = glm::vec3(-9.0f, 1.7f, -0.33f);
+glm::vec3 emitterVelocity = glm::vec3(0.01f, 0.01f, 0.01f);
+glm::vec3 particleOffset = glm::vec3(0.01f, 0.01f, 0.01f);
 
 // weight for the diffusive component
 GLfloat Kd = 3.0f;
@@ -209,7 +178,7 @@ int main()
     glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
 
     // we create the application's window
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "RTGP_lecture06a", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "RTGP-project", nullptr, nullptr);
     if (!window)
     {
         std::cout << "Failed to create GLFW window" << std::endl;
@@ -248,6 +217,7 @@ int main()
     Shader illumination_shader = Shader("21_ggx_tex_shadow.vert", "22_ggx_tex_shadow.frag");
     Shader shaderSSAO("23_ssao.vs", "24_ssao.fs");
     Shader shaderSSAOBlur("23_ssao.vs", "25_ssao_blur.fs");
+    Shader particleShader("26_particle.vert", "27_particle.frag");
 
     // shader configuration
     // --------------------
@@ -267,6 +237,7 @@ int main()
     // we load the images and store them in a vector
     // textureID.push_back(LoadTexture("../textures/UV_Grid_Sm.png"));
     textureID.push_back(LoadTexture("../textures/SoilCracked.png"));
+    textureID.push_back(LoadTexture("../textures/smoke_texture.png"));
 
     // we load the model(s) (code of Model class is in include/utils/model.h)
     Model sponzaModel("../models/sponza/sponza.obj");
@@ -412,6 +383,30 @@ int main()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
+    // initialize particles
+    // ----------------------
+    for (unsigned int i = 0; i < nr_particles; ++i)
+        particles.push_back(Particle());
+
+    unsigned int particleVAO, particleVBO;
+    float particle_quad[] = {
+        // Positions       // TexCoords
+        -0.5f, -0.5f, 0.0f, 0.0f, 0.0f,
+        0.5f, -0.5f, 0.0f, 1.0f, 0.0f,
+        0.5f,  0.5f, 0.0f, 1.0f, 1.0f,
+        -0.5f,  0.5f, 0.0f, 0.0f, 1.0f
+    };
+
+    glGenVertexArrays(1, &particleVAO);
+    glGenBuffers(1, &particleVBO);
+    glBindVertexArray(particleVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(particle_quad), particle_quad, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glBindVertexArray(0);
 
     // Projection matrix of the camera: FOV angle, aspect ratio, near and far planes
     glm::mat4 projection = glm::perspective(45.0f, (float)screenWidth/(float)screenHeight, 0.1f, 10000.0f);
@@ -509,12 +504,47 @@ int main()
         // we set the viewport for the final rendering step
         glViewport(0, 0, width, height);
 
+        unsigned int nr_new_particles = 2;
+        // add new particles
+        for (unsigned int i = 0; i < nr_new_particles; ++i) {
+            int unusedParticle = FirstUnusedParticle();
+            RespawnParticle(particles[unusedParticle], emitterPosition, emitterVelocity, particleOffset);
+        }
+        // update all particles
+        for (unsigned int i = 0; i < nr_particles; ++i) {
+            //std::cout << particles[i].Position.x << std::endl;
+            Particle &p = particles[i];
+            p.Life -= deltaTime; // reduce life
+            if (p.Life > 0.0f) {	// particle is alive, thus update
+                p.Position -= p.Velocity * deltaTime;
+                p.Color.a -= deltaTime * 2.5f;
+            }
+        }
+
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glEnable(GL_BLEND);
+        particleShader.Use();
+        particleShader.setMat4("projection", projection);
+        particleShader.setMat4("view", view);
+
+        for (Particle particle : particles) {
+            if (particle.Life > 0.0f) {
+                particleShader.setVec3("offset", particle.Position);
+                particleShader.setVec4("color", particle.Color);
+
+                glBindVertexArray(particleVAO);
+                glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+                glBindVertexArray(0);
+            }
+        }
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
         // We "install" the selected Shader Program as part of the current rendering process. We pass to the shader the light transformation matrix, and the depth map rendered in the first rendering step
         illumination_shader.Use();
          // we search inside the Shader Program the name of the subroutine currently selected, and we get the numerical index
         GLuint index = glGetSubroutineIndex(illumination_shader.ID, GL_FRAGMENT_SHADER, shaders[current_subroutine].c_str());
         // we activate the subroutine using the index (this is where shaders swapping happens)
-        glUniformSubroutinesuiv( GL_FRAGMENT_SHADER, 1, &index);
+        glUniformSubroutinesuiv(GL_FRAGMENT_SHADER, 1, &index);
 
         // we pass projection and view matrices to the Shader Program
         illumination_shader.setMat4("projectionMatrix", projection);
@@ -593,8 +623,8 @@ void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint 
     planeModelMatrix = glm::translate(planeModelMatrix, glm::vec3(0.0f, -1.0f, 0.0f));
     planeModelMatrix = glm::scale(planeModelMatrix, glm::vec3(10.0f, 1.0f, 10.0f));
     planeNormalMatrix = glm::inverseTranspose(glm::mat3(view*planeModelMatrix));
-    glUniformMatrix4fv(glGetUniformLocation(shader.ID, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(planeModelMatrix));
-    glUniformMatrix3fv(glGetUniformLocation(shader.ID, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(planeNormalMatrix));
+    shader.setMat4("modelMatrix", planeModelMatrix);
+    shader.setMat3("normalMatrix", planeNormalMatrix);
     // we render the plane
     planeModel.Draw(shader);
 
@@ -604,8 +634,8 @@ void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint 
     sponzaNormalMatrix = glm::mat3(1.0f);
     sponzaModelMatrix = glm::scale(sponzaModelMatrix, glm::vec3(0.01f, 0.01f, 0.01f));
     sponzaNormalMatrix = glm::inverseTranspose(glm::mat3(view*sponzaModelMatrix));
-    glUniformMatrix4fv(glGetUniformLocation(shader.ID, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(sponzaModelMatrix));
-    glUniformMatrix3fv(glGetUniformLocation(shader.ID, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(sponzaNormalMatrix));
+    shader.setMat4("modelMatrix", sponzaModelMatrix);
+    shader.setMat3("normalMatrix", sponzaNormalMatrix);
 
     // we render the sponza model
     sponzaModel.Draw(shader);
@@ -779,8 +809,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 
 //////////////////////////////////////////
 // callback for mouse events
-void mouse_callback(GLFWwindow* window, double xpos, double ypos)
-{
+void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
       // we move the camera view following the mouse cursor
       // we calculate the offset of the mouse cursor from the position in the last frame
       // when rendering the first frame, we do not have a "previous state" for the mouse, so we set the previous state equal to the initial values (thus, the offset will be = 0)
@@ -801,5 +830,51 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 
       // we pass the offset to the Camera class instance in order to update the rendering
       camera.ProcessMouseMovement(xoffset, yoffset);
-
 }
+
+
+// void RespawnParticle(Particle &particle, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 offset) {
+//     float random = ((rand() % 100) - 50) / 100.0f;
+//     float rColor = 0.5f + ((rand() % 100) / 10.0f);
+//     particle.Position = emitterPosition + random + offset;
+//     particle.Color = glm::vec4(rColor, rColor, rColor, 1.0f);
+//     particle.Life = 1.0f;
+//     particle.Velocity = emitterVelocity * 0.1f;
+// }
+void RespawnParticle(Particle &particle, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 offset) {
+    // Set position randomly around the emitter position within the offset
+    particle.Position = emitterPosition + glm::vec3(
+        offset.x + ((rand() % 100) - 50) / 100.0f,
+        offset.y + ((rand() % 100) - 50) / 100.0f,
+        offset.z + ((rand() % 100) - 50) / 100.0f
+    );
+    float rColor = 0.5f + ((rand() % 100) / 10.0f);
+    particle.Color = glm::vec4(rColor, rColor, rColor, 1.0f);
+
+    // Set velocity based on emitter velocity
+    particle.Velocity = emitterVelocity * 0.1f;
+
+    // Set other properties (e.g., color, life)
+    particle.Color = glm::vec4(1.0f); // You may set this to a random color if desired
+    particle.Life = 1.0f; // Initial lifespan, adjust as needed
+}
+
+unsigned int FirstUnusedParticle() {
+    // search from last used particle, this will usually return almost instantly
+    for (unsigned int i = lastUsedParticle; i < nr_particles; ++i) {
+        if (particles[i].Life <= 0.0f){
+            lastUsedParticle = i;
+            return i;
+        }
+    }
+    // otherwise, do a linear search
+    for (unsigned int i = 0; i < lastUsedParticle; ++i) {
+        if (particles[i].Life <= 0.0f){
+            lastUsedParticle = i;
+            return i;
+        }
+    }
+    // override first particle if all others are alive
+    lastUsedParticle = 0;
+    return 0;
+}   
