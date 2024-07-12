@@ -6,8 +6,7 @@ out vec4 FragColor;
 
 uniform sampler2D sprite;
 
-void main()
-{
+void main() {
     vec4 sampled = texture(sprite, TexCoords);
-    FragColor = sampled * vertexColor;
+    FragColor = vertexColor * sampled;
 }

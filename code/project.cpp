@@ -31,11 +31,15 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/random.hpp> 
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/color_space.hpp> 
 
 // we include the library for images loading
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image/stb_image.h>
 #include <random>
+#include <chrono>
 
 // dimensions of application's window
 GLuint screenWidth = 1200, screenHeight = 900;
@@ -62,7 +66,6 @@ void PrintCurrentShader(int subroutine);
 
 // in this application, we have isolated the models rendering using a function, which will be called in each rendering step
 void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint render_pass, GLuint depthMap);
-
 
 // load image from disk and create an OpenGL texture
 GLint LoadTexture(const char* path);
@@ -117,8 +120,6 @@ PointLight pointLight {
 };
 
 /////////////////// Particles ///////////////////////
-unsigned int lastUsedParticle = 0;
-
 struct Particle {
     glm::vec3 Position, Velocity;
     glm::vec4 Color;
@@ -129,12 +130,21 @@ struct Particle {
 };  
 
 unsigned int FirstUnusedParticle();
-void RespawnParticle(Particle &particle, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 offset);
-unsigned int nr_particles = 100000;
+void updateParticles(float deltaTime);
+void RespawnParticle(
+    Particle &particle, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 offset
+);
+void addNewParticles(
+    int nr_new_particles, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 particleOffset
+);
+
+unsigned int lastUsedParticle = 0;
+unsigned int nr_new_particles = 100;    // per frame
+unsigned int nr_particles = 1000000;    // number of particles in total 
 std::vector<Particle> particles;
 
 glm::vec3 emitterPosition = glm::vec3(-9.0f, 1.7f, -0.33f);
-glm::vec3 emitterVelocity = glm::vec3(0.01f, 0.01f, 0.01f);
+glm::vec3 emitterVelocity = glm::vec3(0.0f, -0.01f, 0.0f);
 glm::vec3 particleOffset = glm::vec3(0.01f, 0.01f, 0.01f);
 
 // weight for the diffusive component
@@ -152,6 +162,8 @@ GLfloat repeat = 1.0;
 
 bool enableSSAO = GL_TRUE;
 bool enablePointLight = GL_TRUE;
+bool enableFPSOutput = false;
+bool enableParticles = false;
 
 int kernelSize = 512;
 
@@ -178,7 +190,7 @@ int main()
     glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
 
     // we create the application's window
-    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "RTGP-project", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(screenWidth, screenHeight, "RTGP_project", nullptr, nullptr);
     if (!window)
     {
         std::cout << "Failed to create GLFW window" << std::endl;
@@ -215,12 +227,13 @@ int main()
     Shader shadow_shader("19_shadowmap.vert", "20_shadowmap.frag");
     // we create the Shader Program used for objects (which presents different subroutines we can switch)
     Shader illumination_shader = Shader("21_ggx_tex_shadow.vert", "22_ggx_tex_shadow.frag");
-    Shader shaderSSAO("23_ssao.vs", "24_ssao.fs");
-    Shader shaderSSAOBlur("23_ssao.vs", "25_ssao_blur.fs");
+    Shader shaderSSAO("23_ssao.vert", "24_ssao.frag");
+    Shader shaderSSAOBlur("23_ssao.vert", "25_ssao_blur.frag");
     Shader particleShader("26_particle.vert", "27_particle.frag");
 
-    // shader configuration
-    // --------------------
+    ///////////////////////////////////////////////////////////////////
+    // SSAO shader configuration
+    // -----------------------------------------------------
     shaderSSAO.Use();
     shaderSSAO.setInt("gPosition", 0);
     shaderSSAO.setInt("gNormal", 1);
@@ -237,7 +250,7 @@ int main()
     // we load the images and store them in a vector
     // textureID.push_back(LoadTexture("../textures/UV_Grid_Sm.png"));
     textureID.push_back(LoadTexture("../textures/SoilCracked.png"));
-    textureID.push_back(LoadTexture("../textures/smoke_texture.png"));
+    textureID.push_back(LoadTexture("../textures/smoke_texture.jpeg"));
 
     // we load the model(s) (code of Model class is in include/utils/model.h)
     Model sponzaModel("../models/sponza/sponza.obj");
@@ -277,9 +290,9 @@ int main()
     glReadBuffer(GL_NONE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-
+    ///////////////////////////////////////////////////////////////////
     // configure g-buffer framebuffer
-    // ------------------------------
+    // -----------------------------------------------------
     unsigned int gBuffer;
     glGenFramebuffers(1, &gBuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
@@ -320,6 +333,7 @@ int main()
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         std::cout << "Framebuffer not complete!" << std::endl;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
     ///////////////////////////////////////////////////////////////////
     // also create framebuffer to hold SSAO processing stage 
     // -----------------------------------------------------
@@ -348,8 +362,9 @@ int main()
         std::cout << "SSAO Blur Framebuffer not complete!" << std::endl;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // generate sample kernel
-    // ----------------------
+    ///////////////////////////////////////////////////////////////////
+    // generate sample kernel for SSAO
+    // -----------------------------------------------------
     std::uniform_real_distribution<GLfloat> randomFloats(0.0, 1.0); // generates random floats between 0.0 and 1.0
     std::default_random_engine generator;
     std::vector<glm::vec3> ssaoKernel;
@@ -366,8 +381,9 @@ int main()
         ssaoKernel.push_back(sample);
     }
 
-    // generate noise texture
-    // ----------------------
+    ///////////////////////////////////////////////////////////////////
+    // generate noise texture for SSAO
+    // -----------------------------------------------------
     std::vector<glm::vec3> ssaoNoise;
     for (unsigned int i = 0; i < 16; i++)
     {
@@ -383,14 +399,15 @@ int main()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
+    ///////////////////////////////////////////////////////////////////
     // initialize particles
-    // ----------------------
+    // -----------------------------------------------------
+    unsigned int particleVAO, particleVBO;
     for (unsigned int i = 0; i < nr_particles; ++i)
         particles.push_back(Particle());
 
-    unsigned int particleVAO, particleVBO;
-    float particle_quad[] = {
-        // Positions       // TexCoords
+    float particleQuad[] = {
+        // Position     // TexCoords
         -0.5f, -0.5f, 0.0f, 0.0f, 0.0f,
         0.5f, -0.5f, 0.0f, 1.0f, 0.0f,
         0.5f,  0.5f, 0.0f, 1.0f, 1.0f,
@@ -399,17 +416,27 @@ int main()
 
     glGenVertexArrays(1, &particleVAO);
     glGenBuffers(1, &particleVBO);
+
     glBindVertexArray(particleVAO);
     glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(particle_quad), particle_quad, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(particleQuad), particleQuad, GL_STATIC_DRAW);
+
+    // Position attribute
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+
+    // TexCoords attribute
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+
     glBindVertexArray(0);
 
     // Projection matrix of the camera: FOV angle, aspect ratio, near and far planes
     glm::mat4 projection = glm::perspective(45.0f, (float)screenWidth/(float)screenHeight, 0.1f, 10000.0f);
+
+    // for the calculation of the FPS count
+    auto startTime = std::chrono::high_resolution_clock::now();
+    int frameCount = 0;
 
     // Rendering loop: this code is executed at each frame
     while(!glfwWindowShouldClose(window))
@@ -420,7 +447,19 @@ int main()
         deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
 
-        // std::cout << camera.Position.x << ", " << camera.Position.y << ", " << camera.Position.z << std::endl;
+        if (enableFPSOutput) {
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            double deltaTimeFPS = std::chrono::duration<double, std::milli>(currentTime - startTime).count() / 1000.0;
+            frameCount++;
+
+            // calculation of the FPS every second
+            if (deltaTimeFPS >= 1.0) {
+                double fps = frameCount / deltaTimeFPS;
+                std::cout << "FPS: " << fps << std::endl;
+                frameCount = 0;
+                startTime = currentTime;
+            }
+        }
 
         // Check is an I/O event is happening
         glfwPollEvents();
@@ -453,7 +492,7 @@ int main()
         // we render the scene, using the shadow shader
         RenderObjects(shadow_shader, planeModel, sponzaModel, SHADOWMAP, depthMap);
 
-        // 2. generate SSAO texture
+        // generate SSAO texture
         // ------------------------
         glBindFramebuffer(GL_FRAMEBUFFER, ssaoFBO);
             glClear(GL_COLOR_BUFFER_BIT);
@@ -473,7 +512,7 @@ int main()
             RenderObjects(shaderSSAO, planeModel, sponzaModel, SHADOWMAP, depthMap);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-        // 3. blur SSAO texture to remove noise
+        // blur SSAO texture to remove noise
         // ------------------------------------
         glBindFramebuffer(GL_FRAMEBUFFER, ssaoBlurFBO);
             glClear(GL_COLOR_BUFFER_BIT);
@@ -504,40 +543,36 @@ int main()
         // we set the viewport for the final rendering step
         glViewport(0, 0, width, height);
 
-        unsigned int nr_new_particles = 2;
-        // add new particles
-        for (unsigned int i = 0; i < nr_new_particles; ++i) {
-            int unusedParticle = FirstUnusedParticle();
-            RespawnParticle(particles[unusedParticle], emitterPosition, emitterVelocity, particleOffset);
-        }
-        // update all particles
-        for (unsigned int i = 0; i < nr_particles; ++i) {
-            //std::cout << particles[i].Position.x << std::endl;
-            Particle &p = particles[i];
-            p.Life -= deltaTime; // reduce life
-            if (p.Life > 0.0f) {	// particle is alive, thus update
-                p.Position -= p.Velocity * deltaTime;
-                p.Color.a -= deltaTime * 2.5f;
+        // calculate and render particles
+        // ------------------------------------
+        if (enableParticles) {
+            // add new particles
+            addNewParticles(nr_new_particles, emitterPosition, emitterVelocity, particleOffset);
+            // update all particles
+            updateParticles(deltaTime);
+
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+            glEnable(GL_BLEND);
+            particleShader.Use();
+            particleShader.setMat4("projection", projection);
+            particleShader.setMat4("view", view);
+
+            glActiveTexture(GL_TEXTURE0); 
+            glBindTexture(GL_TEXTURE_2D, textureID[1]); 
+            particleShader.setInt("sprite", 0); 
+
+            for (Particle &particle : particles) { 
+                if (particle.Life > 0.0f) {
+                    particleShader.setVec3("offset", particle.Position);
+                    particleShader.setVec4("color", particle.Color);
+
+                    glBindVertexArray(particleVAO);
+                    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+                    glBindVertexArray(0);
+                }
             }
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         }
-
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-        glEnable(GL_BLEND);
-        particleShader.Use();
-        particleShader.setMat4("projection", projection);
-        particleShader.setMat4("view", view);
-
-        for (Particle particle : particles) {
-            if (particle.Life > 0.0f) {
-                particleShader.setVec3("offset", particle.Position);
-                particleShader.setVec4("color", particle.Color);
-
-                glBindVertexArray(particleVAO);
-                glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-                glBindVertexArray(0);
-            }
-        }
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
         // We "install" the selected Shader Program as part of the current rendering process. We pass to the shader the light transformation matrix, and the depth map rendered in the first rendering step
         illumination_shader.Use();
@@ -557,6 +592,7 @@ int main()
         illumination_shader.setFloat("Kd", Kd);
         illumination_shader.setVec3("lightVector", lightDir0);
 
+        // set parameters for the PointLight
         illumination_shader.setVec3("pointLight.position", pointLight.position);
         illumination_shader.setFloat("pointLight.constant", pointLight.constant);
         illumination_shader.setFloat("pointLight.linear", pointLight.linear);
@@ -583,9 +619,9 @@ int main()
     // we delete the Shader Programs
     illumination_shader.Delete();
     shadow_shader.Delete();
+    particleShader.Delete();
     shaderSSAO.Delete();
     shaderSSAOBlur.Delete();
-    // chiudo e cancello il contesto creato
     glfwTerminate();
     return 0;
 }
@@ -608,16 +644,7 @@ void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint 
     shader.setFloat("tex", 1);
     shader.setFloat("repeat", 1.0);
 
-    // /*
-    //   we create the transformation matrix
-
-    //   N.B.) the last defined is the first applied
-
-    //   We need also the matrix for normals transformation, which is the inverse of the transpose of the 3x3 submatrix (upper left) of the modelview. We do not consider the 4th column because we do not need translations for normals.
-    //   An explanation (where XT means the transpose of X, etc):
-    //     "Two column vectors X and Y are perpendicular if and only if XT.Y=0. If We're going to transform X by a matrix M, we need to transform Y by some matrix N so that (M.X)T.(N.Y)=0. Using the identity (A.B)T=BT.AT, this becomes (XT.MT).(N.Y)=0 => XT.(MT.N).Y=0. If MT.N is the identity matrix then this reduces to XT.Y=0. And MT.N is the identity matrix if and only if N=(MT)-1, i.e. N is the inverse of the transpose of M.
-    // */
-    // // we reset to identity at each frame
+    // PLANE
     planeModelMatrix = glm::mat4(1.0f);
     planeNormalMatrix = glm::mat3(1.0f);
     planeModelMatrix = glm::translate(planeModelMatrix, glm::vec3(0.0f, -1.0f, 0.0f));
@@ -625,11 +652,11 @@ void RenderObjects(Shader &shader, Model &planeModel, Model &sponzaModel, GLint 
     planeNormalMatrix = glm::inverseTranspose(glm::mat3(view*planeModelMatrix));
     shader.setMat4("modelMatrix", planeModelMatrix);
     shader.setMat3("normalMatrix", planeNormalMatrix);
+
     // we render the plane
     planeModel.Draw(shader);
 
     // SPONZA
-    // we reset to identity at each frame
     sponzaModelMatrix = glm::mat4(1.0f);
     sponzaNormalMatrix = glm::mat3(1.0f);
     sponzaModelMatrix = glm::scale(sponzaModelMatrix, glm::vec3(0.01f, 0.01f, 0.01f));
@@ -776,6 +803,14 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         std::cout << "Switched PointLight: " << (enablePointLight ? "ON" : "OFF") << std::endl;
         enablePointLight = !enablePointLight;
     }
+    if(key == GLFW_KEY_G && action == GLFW_PRESS) {
+        enableFPSOutput = !enableFPSOutput;
+        std::cout << "Switched FPS output: " << (enableFPSOutput ? "ON" : "OFF") << std::endl;
+    }
+    if(key == GLFW_KEY_P && action == GLFW_PRESS) {
+        enableParticles = !enableParticles;
+        std::cout << "Switched Particles: " << (enableParticles ? "ON" : "OFF") << std::endl;
+    }
 
     // pressing a key number, we change the shader applied to the models
     // if the key is between 1 and 9, we proceed and check if the pressed key corresponds to
@@ -832,31 +867,14 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
       camera.ProcessMouseMovement(xoffset, yoffset);
 }
 
-
-// void RespawnParticle(Particle &particle, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 offset) {
-//     float random = ((rand() % 100) - 50) / 100.0f;
-//     float rColor = 0.5f + ((rand() % 100) / 10.0f);
-//     particle.Position = emitterPosition + random + offset;
-//     particle.Color = glm::vec4(rColor, rColor, rColor, 1.0f);
-//     particle.Life = 1.0f;
-//     particle.Velocity = emitterVelocity * 0.1f;
-// }
 void RespawnParticle(Particle &particle, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 offset) {
-    // Set position randomly around the emitter position within the offset
-    particle.Position = emitterPosition + glm::vec3(
-        offset.x + ((rand() % 100) - 50) / 100.0f,
-        offset.y + ((rand() % 100) - 50) / 100.0f,
-        offset.z + ((rand() % 100) - 50) / 100.0f
-    );
-    float rColor = 0.5f + ((rand() % 100) / 10.0f);
-    particle.Color = glm::vec4(rColor, rColor, rColor, 1.0f);
-
-    // Set velocity based on emitter velocity
-    particle.Velocity = emitterVelocity * 0.1f;
-
-    // Set other properties (e.g., color, life)
-    particle.Color = glm::vec4(1.0f); // You may set this to a random color if desired
-    particle.Life = 1.0f; // Initial lifespan, adjust as needed
+    // Random position within a sphere
+    glm::vec3 randomPos = glm::ballRand(50.0f); // Random position within a unit sphere
+    particle.Position = emitterPosition + randomPos * offset; // Scale and offset
+    particle.Velocity = emitterVelocity;
+    particle.Color = glm::vec4(0.8f, 0.3f, 0.3f, 1.0f); // Set the color to grey
+    particle.Color.b *= 0.5f;  // Reduce blue component
+    particle.Life = 1.0f; // Reset life
 }
 
 unsigned int FirstUnusedParticle() {
@@ -878,3 +896,28 @@ unsigned int FirstUnusedParticle() {
     lastUsedParticle = 0;
     return 0;
 }   
+
+void updateParticles(float deltaTime) {
+    for (unsigned int i = 0; i < nr_particles; ++i) {
+        Particle &p = particles[i];
+        p.Life -= deltaTime; // reduce life
+        if (p.Life > 0.0f) {    // particle is alive, thus update
+            p.Position -= p.Velocity * deltaTime;
+            
+            glm::vec3 darkGray = glm::vec3(0.2f, 0.2f, 0.2f);
+            glm::vec3 lightGray = glm::vec3(0.8f, 0.8f, 0.8f);
+            glm::vec3 color = glm::mix(lightGray, darkGray, p.Life);
+            color.b *= 0.5f;  // Reduce blue component
+            p.Color.r = color.r;
+            p.Color.g = color.g;
+            p.Color.b = color.b;
+        }
+    }
+}
+
+void addNewParticles(int nr_new_particles, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 particleOffset) {
+    for (int i = 0; i < nr_new_particles; ++i) {
+        int unusedParticle = FirstUnusedParticle();
+        RespawnParticle(particles[unusedParticle], emitterPosition, emitterVelocity, particleOffset);
+    }
+}
