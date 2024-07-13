@@ -138,9 +138,9 @@ void addNewParticles(
     int nr_new_particles, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 particleOffset
 );
 
-unsigned int lastUsedParticle = 0;
+unsigned int lastUsedParticle = 0;      // for a more effiecient search 
 unsigned int nr_new_particles = 100;    // per frame
-unsigned int nr_particles = 1000000;    // number of particles in total 
+unsigned int nr_particles = 100000;     // number of particles in total 
 std::vector<Particle> particles;
 
 glm::vec3 emitterPosition = glm::vec3(-9.0f, 1.7f, -0.33f);
@@ -160,12 +160,14 @@ vector<GLint> textureID;
 // UV repetitions
 GLfloat repeat = 1.0;
 
+// bools to enable features
 bool enableSSAO = GL_TRUE;
 bool enablePointLight = GL_TRUE;
 bool enableFPSOutput = false;
 bool enableParticles = false;
 
-int kernelSize = 512;
+// parameters for SSAO
+int kernelSize = 64;
 
 float ourLerp(float a, float b, float f)
 {
@@ -296,7 +298,7 @@ int main()
     unsigned int gBuffer;
     glGenFramebuffers(1, &gBuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
-    unsigned int gPosition, gNormal, gAlbedo;
+    unsigned int gPosition, gNormal;
     // position color buffer
     glGenTextures(1, &gPosition);
     glBindTexture(GL_TEXTURE_2D, gPosition);
@@ -313,23 +315,9 @@ int main()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, gNormal, 0);
-    // color + specular color buffer
-    glGenTextures(1, &gAlbedo);
-    glBindTexture(GL_TEXTURE_2D, gAlbedo);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenWidth, screenHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, gAlbedo, 0);
     // tell OpenGL which color attachments we'll use (of this framebuffer) for rendering 
     unsigned int attachments[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
     glDrawBuffers(3, attachments);
-    // create and attach depth buffer (renderbuffer)
-    unsigned int rboDepth;
-    glGenRenderbuffers(1, &rboDepth);
-    glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, screenWidth, screenHeight);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
-    // finally check if framebuffer is complete
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         std::cout << "Framebuffer not complete!" << std::endl;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -867,14 +855,16 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
       camera.ProcessMouseMovement(xoffset, yoffset);
 }
 
+//////////////////////////////////////////
+// functions to manage Particles
+
 void RespawnParticle(Particle &particle, glm::vec3 emitterPosition, glm::vec3 emitterVelocity, glm::vec3 offset) {
-    // Random position within a sphere
-    glm::vec3 randomPos = glm::ballRand(50.0f); // Random position within a unit sphere
-    particle.Position = emitterPosition + randomPos * offset; // Scale and offset
+    glm::vec3 randomPos = glm::ballRand(50.0f); // random position within a unit sphere
+    particle.Position = emitterPosition + randomPos * offset; // scale and offset
     particle.Velocity = emitterVelocity;
-    particle.Color = glm::vec4(0.8f, 0.3f, 0.3f, 1.0f); // Set the color to grey
-    particle.Color.b *= 0.5f;  // Reduce blue component
-    particle.Life = 1.0f; // Reset life
+    particle.Color = glm::vec4(0.8f, 0.3f, 0.3f, 1.0f); // set the color to grey
+    particle.Color.b *= 0.5f;  // reduce blue component
+    particle.Life = 1.0f; 
 }
 
 unsigned int FirstUnusedParticle() {

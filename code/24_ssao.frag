@@ -7,10 +7,10 @@ uniform sampler2D gPosition;
 uniform sampler2D gNormal;
 uniform sampler2D texNoise;
 
-uniform vec3 samples[512];
+uniform vec3 samples[64];
 
-// parameters (you'd probably want to use them as uniforms to more easily tweak the effect)
-int kernelSize = 512;
+// parameters 
+int kernelSize = 64;
 float radius = 0.05;
 float bias = 0.025;
 
@@ -39,9 +39,6 @@ void main()
     for(int i = 0; i < kernelSize; ++i)
     {
         // get sample position
-        // vec3 samplePos = TBN * samples[i]; // from tangent to view-space
-        // samplePos = fragPos + samplePos * radius; 
-
         vec3 samplePos = TBN * samples[i].xyz;
         samplePos = fragWorldPos + samplePos * radius; 
         samplePos = (view * vec4(samplePos, 1.0)).xyz;
@@ -58,7 +55,6 @@ void main()
         // range check & accumulate
         float rangeCheck = smoothstep(0.0, 1.0, radius / abs(fragPos.z - sampleDepth));
         occlusion += (sampleDepth >= samplePos.z + bias ? 1.0 : 0.0) * rangeCheck;
-        //occlusion += 1;     
     }
     occlusion = 1.0 - (occlusion / kernelSize);
     FragColor = occlusion;

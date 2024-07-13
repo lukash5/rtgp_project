@@ -19,7 +19,7 @@ void main()
     vec3 cameraRight = vec3(view[0][0], view[1][0], view[2][0]);
     vec3 cameraUp = vec3(view[0][1], view[1][1], view[2][1]);
 
-    float scale = 0.001;
+    float scale = 0.005;
     vec3 scaledPosition = position * scale;
 
     vec3 worldPosition = offset + (cameraRight * scaledPosition.x) + (cameraUp * scaledPosition.y);
